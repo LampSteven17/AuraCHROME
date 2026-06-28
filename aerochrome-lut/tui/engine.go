@@ -56,24 +56,31 @@ func engineCommand(cfg runConfig) (*exec.Cmd, context.CancelFunc) {
 	return cmd, cancel
 }
 
-// repoRoot walks up from the cwd looking for pyproject.toml; falls back to cwd.
+// defaultRepo is baked in at build time (`-ldflags -X main.defaultRepo=...`, see
+// the Makefile) so an installed binary finds the engine from anywhere.
+var defaultRepo string
+
+// repoRoot resolves the engine's working dir: $AURACHROME_REPO, then an upward
+// search for pyproject.toml (when run inside the tree), then the baked-in path,
+// then the cwd.
 func repoRoot() string {
 	if env := strings.TrimSpace(os.Getenv("AURACHROME_REPO")); env != "" {
 		return env
 	}
-	dir, err := os.Getwd()
-	if err != nil {
-		return "."
+	if dir, err := os.Getwd(); err == nil {
+		for {
+			if _, err := os.Stat(filepath.Join(dir, "pyproject.toml")); err == nil {
+				return dir
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
 	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "pyproject.toml")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
+	if defaultRepo != "" {
+		return defaultRepo
 	}
 	cwd, _ := os.Getwd()
 	return cwd

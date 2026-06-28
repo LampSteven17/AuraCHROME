@@ -8,6 +8,21 @@ also still emits a portable 3D `.cube` LUT and an experimental Lightroom profile
 
 This is a **perceptual approximation, not a physical one.** "Close, not perfect."
 
+## Quick start
+
+```bash
+make setup      # install Poetry (if missing) + deps, build the TUI
+make install    # put `aurachrome-tui` on your PATH (~/.local/bin)
+make doctor     # verify python / poetry / go / GPU
+make run        # launch the TUI
+
+make convert ARGS="-i RAWS/ -o OUT/ --preset classic --gpu"   # headless batch
+```
+
+`make deps` auto-adds the CUDA group when an NVIDIA GPU is present (force with
+`make gpu`, skip with `GPU=0`). Run `make help` for all targets. Manual
+(Poetry/Go) details below.
+
 ## Install & run (Poetry)
 
 Dependencies are managed with [Poetry](https://python-poetry.org/) in an isolated
