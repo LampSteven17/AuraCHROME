@@ -1,0 +1,48 @@
+[tool.poetry]
+name = "aurachrome"
+version = "0.1.0"
+description = "Aurachrome - Kodak Aerochrome / EIR false-color film engine: RAW -> 16-bit TIFF, CPU or CUDA GPU."
+authors = ["Steven Lamp <srlamp3@gmail.com>"]
+readme = "README.md"
+packages = [
+    { include = "aerochrome" },
+    { include = "scripts" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+numpy = ">=2.0,<2.6"
+scipy = ">=1.13"
+pillow = ">=10.0"
+rawpy = ">=0.21"
+tifffile = ">=2024.1.1"
+
+# GPU acceleration (CUDA 12.x). Optional: `poetry install --with gpu`.
+# The nvidia-*-cu12 wheels ship the CUDA runtime libs (incl. libnvrtc) so CuPy
+# works without a system-wide CUDA toolkit install.
+[tool.poetry.group.gpu]
+optional = true
+
+[tool.poetry.group.gpu.dependencies]
+cupy-cuda12x = ">=14,<15"
+nvidia-cuda-nvrtc-cu12 = "*"
+nvidia-cuda-runtime-cu12 = "*"
+nvidia-cublas-cu12 = "*"
+nvidia-curand-cu12 = "*"
+nvidia-cusparse-cu12 = "*"
+nvidia-cusolver-cu12 = "*"
+nvidia-cufft-cu12 = "*"
+
+[tool.poetry.group.dev]
+optional = true
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+
+[tool.poetry.scripts]
+aurachrome = "scripts.aero_convert:main"
+aero-convert = "scripts.aero_convert:main"   # alias (back-compat)
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
