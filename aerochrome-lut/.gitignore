@@ -11,3 +11,7 @@ luts/presets/*.xmp
 # compiled Go TUI binary
 /aurachrome-tui
 tui/aurachrome-tui
+
+# neural backend: datasets + trained weights (large)
+data/
+models/

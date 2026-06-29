@@ -39,6 +39,31 @@ optional = true
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0"
 
+# Learned RGB->NIR backend (PyTorch, CUDA 12.x). Optional + heavy (~2.3 GB):
+# `poetry install --with neural`. The engine uses the neural NIR as the default
+# IR source only when this group + a weights file are present, else it falls back
+# to the per-pixel GRVI index. torch comes from the explicit PyTorch CUDA index.
+[tool.poetry.group.neural]
+optional = true
+
+[tool.poetry.group.neural.dependencies]
+torch = { version = ">=2.6", source = "pytorch-cu126" }
+# torch's CUDA runtime deps. Poetry won't auto-resolve these because the gpu
+# group's CuPy pins overlapping nvidia-*-cu12 libs to different versions; pin the
+# exact torch-2.6+cu126 set here so `--with neural` is reproducible (these supply
+# libcudnn.so.9 etc. that the torch wheel needs at import). From PyPI, not the
+# explicit torch index, so no source= marker.
+nvidia-cudnn-cu12 = "9.5.1.17"
+nvidia-cusparselt-cu12 = "0.6.3"
+nvidia-nccl-cu12 = "2.21.5"
+nvidia-nvtx-cu12 = "12.6.77"
+nvidia-cuda-cupti-cu12 = "12.6.80"
+
+[[tool.poetry.source]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+priority = "explicit"
+
 [tool.poetry.scripts]
 aurachrome = "scripts.aero_convert:main"
 aero-convert = "scripts.aero_convert:main"   # alias (back-compat)

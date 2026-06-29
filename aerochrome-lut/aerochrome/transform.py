@@ -39,11 +39,17 @@ def smoothstep(e0, e1, x):
     return t * t * (3.0 - 2.0 * t)
 
 
-def aerochrome(rgb, p=None):
+def aerochrome(rgb, p=None, nir=None):
     """rgb: float array (...,3) in [0,1], sRGB display-referred. Same shape out.
 
     Runs on whichever backend owns `rgb`: a NumPy array stays on CPU, a CuPy
     array runs on the GPU. Behavior is identical; only the device differs.
+
+    nir: optional estimated near-infrared channel, shape == rgb[...,0], in [0,1]
+    (e.g. from the learned RGB->NIR model). When given, vegetation is detected
+    from a *real* NDVI = (NIR-R)/(NIR+R) and the NIR feeds the red channel
+    directly — the actual Aerochrome computation with an estimated IR band.
+    When None, the per-pixel GRVI index synthesizes the IR term as before.
     """
     if p is None:
         p = _params.CLASSIC
@@ -60,19 +66,36 @@ def aerochrome(rgb, p=None):
     in_C = in_lch[..., 1]
     in_h = enc.hue_deg(in_lch)
 
-    # ---- stage 1: vegetation signal + synthetic IR -----------------------
-    grvi = (g - r) / (g + r + EPS)          # > 0 for foliage
-    gbi = (g - b) / (g + b + EPS)           # > 0 when green beats blue (reject sky)
-    veg = smoothstep(p['grvi_lo'], p['grvi_hi'], grvi) * \
-          smoothstep(p['gbi_lo'], p['gbi_hi'], gbi)
-    veg = veg ** p['veg_gamma']
-    # chroma-aware boost: saturated organic greens read as "more alive"
+    # ---- stage 1: vegetation signal + IR ---------------------------------
     cb = smoothstep(p['veg_chroma_lo'], p['veg_chroma_hi'], in_C)
-    veg = veg * (1.0 + p['veg_chroma_boost'] * cb)
-    veg = xp.clip(veg, 0.0, 1.0)
-
-    ir = L * (p['ir_base'] + p['ir_veg'] * veg)
-    ir = xp.clip(ir, 0.0, 1.0) ** p['ir_gamma']
+    if nir is not None:
+        # estimated true-IR path: real NDVI drives vegetation; NIR is the red src.
+        nir_lin = xp.clip(xp.asarray(nir, dtype=xp.float64), 0.0, 1.0)
+        ndvi = (nir_lin - r) / (nir_lin + r + EPS)
+        # The model tends to predict high NIR on bright sky/cloud; combined with
+        # sky's low red that yields a high NDVI, so sky gets mis-flagged as veg and
+        # rendered magenta. Reject it the same way the GRVI path does -- sky is
+        # blue-dominant (g<b), so gate veg by green-vs-blue.
+        gbi = (g - b) / (g + b + EPS)
+        veg = smoothstep(p['ndvi_lo'], p['ndvi_hi'], ndvi) \
+            * smoothstep(p['gbi_lo'], p['gbi_hi'], gbi)
+        veg = veg ** p['veg_gamma']
+        veg = xp.clip(veg * (1.0 + p['veg_chroma_boost'] * cb), 0.0, 1.0)
+        # gate IR by vegetation: non-veg (red signage, paint) gets little IR so the
+        # red->green rotation stays clean; foliage gets the full predicted NIR.
+        ir = xp.clip(nir_lin * (p['nir_red_base'] + p['nir_red_veg'] * veg),
+                     0.0, 1.0) ** p['ir_gamma']
+    else:
+        # synthesized-IR path: visible-band GRVI index, gated by green-vs-blue.
+        grvi = (g - r) / (g + r + EPS)          # > 0 for foliage
+        gbi = (g - b) / (g + b + EPS)           # > 0 when green beats blue (reject sky)
+        veg = smoothstep(p['grvi_lo'], p['grvi_hi'], grvi) * \
+              smoothstep(p['gbi_lo'], p['gbi_hi'], gbi)
+        veg = veg ** p['veg_gamma']
+        veg = veg * (1.0 + p['veg_chroma_boost'] * cb)   # saturated greens read "alive"
+        veg = xp.clip(veg, 0.0, 1.0)
+        ir = L * (p['ir_base'] + p['ir_veg'] * veg)
+        ir = xp.clip(ir, 0.0, 1.0) ** p['ir_gamma']
 
     # ---- stage 2: the channel rotation (in linear) -----------------------
     R = ir              # IR    -> red
@@ -144,6 +167,13 @@ def aerochrome(rgb, p=None):
     # global desat toward output luma (takes the digital edge off)
     gL = (out[..., 0] * 0.2126 + out[..., 1] * 0.7152 + out[..., 2] * 0.0722)[..., None]
     out = out * (1.0 - p['desat']) + gL * p['desat']
+
+    # neural path only: veg-weighted desat to calm the model's intense magenta
+    # (foliage gets the most pull-back; sky/neutrals largely untouched).
+    if nir is not None and p.get('nir_desat', 0) > 0:
+        nL = (out[..., 0] * 0.2126 + out[..., 1] * 0.7152 + out[..., 2] * 0.0722)[..., None]
+        w = (p['nir_desat'] * veg)[..., None]
+        out = out * (1.0 - w) + nL * w
 
     # gentle S-curve + small black lift (in display space)
     out = xp.clip(out, 0.0, 1.0)

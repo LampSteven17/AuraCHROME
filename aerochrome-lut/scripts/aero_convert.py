@@ -28,7 +28,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from aerochrome import backend, grain as _grain, params, transform  # noqa: E402
+from aerochrome import backend, grain as _grain, neural, params, transform  # noqa: E402
 
 RAW_EXTS = {".arw", ".cr2", ".cr3", ".nef", ".raf", ".rw2", ".dng", ".orf", ".raw"}
 IMG_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
@@ -92,24 +92,34 @@ def save_tiff16(path, rgb01):
 
 
 # ---- core -----------------------------------------------------------------
-def _transform_chunked(arr, p, chunk_px=2_000_000):
+def _transform_chunked(arr, p, nir=None, chunk_px=2_000_000):
     """Apply the transform in flat pixel chunks to bound (CPU or GPU) memory.
 
     Chunking matters on the GPU too: the transform allocates many temporaries, so
-    a whole 33 MP frame at once could exhaust VRAM."""
+    a whole 33 MP frame at once could exhaust VRAM. `nir` (full-frame H×W) is
+    flattened and sliced in lockstep so each chunk gets its matching IR pixels."""
     xp = backend.xp_for(arr)
     h, w, _ = arr.shape
     flat = arr.reshape(-1, 3)
+    nflat = None if nir is None else xp.asarray(nir).reshape(-1)
     out = xp.empty_like(flat)
     for i in range(0, flat.shape[0], chunk_px):
-        out[i:i + chunk_px] = transform.aerochrome(flat[i:i + chunk_px], p)
+        nchunk = None if nflat is None else nflat[i:i + chunk_px]
+        out[i:i + chunk_px] = transform.aerochrome(flat[i:i + chunk_px], p, nir=nchunk)
     return out.reshape(h, w, 3)
 
 
-def convert(arr, preset, add_grain=True, seed=0):
-    """Transform + optional grain. Runs on whichever device owns `arr`."""
+def convert(arr, preset, add_grain=True, seed=0, use_neural=None):
+    """Transform + optional grain. Runs on whichever device owns `arr`.
+
+    When the learned RGB->NIR model is available (torch + CUDA + weights), it
+    predicts a NIR channel that drives the look as the default IR source; absent
+    that, the per-pixel GRVI index synthesizes IR (automatic fallback)."""
     p = params.get(preset)
-    out = _transform_chunked(arr, p)
+    if use_neural is None:
+        use_neural = neural.is_available()
+    nir = neural.predict_nir(arr) if use_neural else None
+    out = _transform_chunked(arr, p, nir=nir)
     if add_grain and p.get("grain_strength", 0) > 0:
         out = _grain.chromatic_grain(out, p["grain_strength"], p["grain_size"],
                                      p.get("grain_chroma", 0.35), seed=seed)
@@ -139,16 +149,19 @@ def _maybe_downscale(arr, longedge):
     return arr
 
 
-def process_one(src, n, outdir, presets, add_grain, longedge, use_gpu):
+def process_one(src, n, outdir, presets, add_grain, longedge, use_gpu, use_neural=False):
     """Convert one input file across all requested presets. Returns
     (source_basename, dims, [(preset, dst_path), ...]). Top-level so it is
-    picklable for the multiprocessing path."""
+    picklable for the multiprocessing path. `use_neural` is forced False in
+    forked CPU workers (CUDA + multiprocessing don't mix); the neural NIR runs
+    only on the serial path."""
     arr = _maybe_downscale(load_image(src), longedge)
     dev = backend.to_device(arr, use_gpu)
     stem = os.path.splitext(os.path.basename(src))[0]
     results = []
     for idx, pre in enumerate(presets):
-        out = backend.to_numpy(convert(dev, pre, add_grain=add_grain, seed=n * 101 + idx))
+        out = backend.to_numpy(convert(dev, pre, add_grain=add_grain,
+                                       seed=n * 101 + idx, use_neural=use_neural))
         name = stem if len(presets) == 1 else f"{pre}-{stem}"
         dst = os.path.join(outdir, name + ".tif")
         save_tiff16(dst, out)
@@ -164,6 +177,8 @@ def run(inputs, outdir, presets, add_grain, longedge=0, use_gpu=False, jobs=1,
     serial = use_gpu or jobs <= 1 or len(inputs) <= 1
     mode = backend.device_name() if use_gpu else (
         f"cpu x{jobs}" if not serial else "cpu (serial)")
+    neural_on = serial and neural.is_available()
+    ir_src = "neural NIR" if neural_on else "GRVI index"
 
     def emit(obj):
         sys.stdout.write(json.dumps(obj) + "\n")
@@ -171,9 +186,10 @@ def run(inputs, outdir, presets, add_grain, longedge=0, use_gpu=False, jobs=1,
 
     if progress_json:
         emit({"event": "start", "total": total, "files": len(inputs),
-              "looks": len(presets), "device": mode, "outdir": outdir})
+              "looks": len(presets), "device": mode, "ir": ir_src, "outdir": outdir})
     else:
-        print(DIM(f"device: {mode}   |   {len(inputs)} file(s) x {len(presets)} look(s)\n"))
+        print(DIM(f"device: {mode}   |   IR: {ir_src}   |   "
+                  f"{len(inputs)} file(s) x {len(presets)} look(s)\n"))
 
     def report(stem, dims, results):
         nonlocal done
@@ -193,7 +209,7 @@ def run(inputs, outdir, presets, add_grain, longedge=0, use_gpu=False, jobs=1,
     if serial:
         for n, src in enumerate(inputs, start=1):
             stem, dims, results = process_one(
-                src, n, outdir, presets, add_grain, longedge, use_gpu)
+                src, n, outdir, presets, add_grain, longedge, use_gpu, neural_on)
             report(stem, dims, results)
     else:
         with ProcessPoolExecutor(max_workers=jobs) as ex:

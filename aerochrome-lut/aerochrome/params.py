@@ -19,6 +19,15 @@ CLASSIC = dict(
     grvi_lo=0.05, grvi_hi=0.45,      # green-vs-red index gate; foliage > 0
     gbi_lo=-0.05, gbi_hi=0.45,       # green-vs-blue gate; rejects blue/cyan sky
     veg_gamma=0.85,
+    # NDVI gate used ONLY on the learned-NIR path (real NDVI=(NIR-R)/(NIR+R)).
+    ndvi_lo=0.10, ndvi_hi=0.50,      # >~0.2 = vegetation; soft ramp 0.10..0.50
+    # neural-path look tuning (active only when a predicted NIR is supplied):
+    # gate the IR->red channel by vegetation so non-veg reds keep the clean
+    # red->green rotation (fixes red signage going amber) while foliage stays
+    # magenta; plus a veg-weighted desat to calm the model's intense magenta.
+    nir_red_base=0.18,               # IR floor for non-veg (low => reds rotate to green)
+    nir_red_veg=0.95,                # IR gain on vegetation (keeps foliage hot)
+    nir_desat=0.40,                  # veg-weighted output desaturation (calms the magenta)
     # chroma-aware boost: saturated organic greens get more synthetic IR than
     # dull yellow-green grass or a flat green wall (modest -- it is still a
     # per-pixel correlation, NOT a recovery of real IR).
