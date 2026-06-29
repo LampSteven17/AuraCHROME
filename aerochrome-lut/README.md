@@ -12,7 +12,7 @@ This is a **perceptual approximation, not a physical one.** "Close, not perfect.
 
 ```bash
 make setup      # install Poetry (if missing) + deps, build the TUI
-make install    # put `aurachrome-tui` on your PATH (~/.local/bin)
+make install    # put `aurachrome` (the TUI) on your PATH (~/.local/bin)
 make doctor     # verify python / poetry / go / GPU
 make run        # launch the TUI
 
@@ -46,11 +46,21 @@ approximation, no look-table banding) plus optional chromatic film grain, and
 writes lossless 16-bit TIFFs (sRGB).
 
 ```bash
-poetry run aero-convert                         # interactive TUI
-poetry run aero-convert -i RAWS/ -o OUT/ --preset classic        # batch
-poetry run aero-convert -i RAWS/ -o OUT/ --preset all --gpu      # all looks, GPU
-poetry run aero-convert -i RAWS/ -o OUT/ --no-grain --jobs 8     # CPU, 8 workers
+poetry run aurachrome                                            # interactive TUI
+poetry run aurachrome -i RAWS/ -o OUT/ --preset classic          # batch
+poetry run aurachrome -i RAWS/ -o OUT/ --preset all --gpu        # all looks, GPU
+poetry run aurachrome -i RAWS/ -o OUT/ --format both --longedge 2048   # TIFF+JPEG, downscaled
+poetry run aurachrome -i RAWS/ -o OUT/ --no-grain --no-neural --jobs 8 # CPU, GRVI, 8 workers
 ```
+
+Export options:
+
+- `--format tiff16|jpeg|both` — 16-bit TIFF (default), an 8-bit sRGB JPEG, or both
+  written side by side. JPEG is the quick-share / proof; TIFF is the master.
+- `--longedge N` — downscale the long edge to `N` px (0 = full resolution) for
+  fast previews.
+- `--no-neural` — force the per-pixel GRVI index even when the learned NIR model
+  is present (otherwise neural NIR is the default IR source on the serial path).
 
 Why 16-bit TIFF and not "RAW out": a camera RAW is undemosaiced sensor data;
 once the look is applied you have real RGB pixels, so there is no mosaic to write
@@ -59,14 +69,20 @@ back. 16-bit TIFF is the lossless, universal interchange for LR/PS.
 ### TUI (Go / Bubble Tea)
 
 A terminal wizard front-end lives in `tui/` (its own Go module, Charm stack). It
-collects input/output/look/grain/device, then drives the Python engine as a
-subprocess and renders its JSON progress live. The engine and TUI stay decoupled:
-the contract is the `--progress-json` line stream.
+collects input/output and the export options (look · format · size · grain · IR
+engine · device · jobs), then drives the Python engine as a subprocess and renders
+its JSON progress live — including which IR source actually ran (neural NIR vs
+GRVI). The engine and TUI stay decoupled: the contract is the `--progress-json`
+line stream.
 
 ```bash
-go build -o aurachrome-tui ./tui      # from the repo root (Go 1.25+)
-./aurachrome-tui                       # needs `poetry` + the engine installed
+./aurachrome      # from the repo root — builds the Go binary on first run, then launches
 ```
+
+`./aurachrome` is a small launcher script: it compiles `tui/aurachrome` the first
+time (and whenever a `tui/*.go` source changes), then execs it. No PATH install
+needed — just `cd` into the repo and run it (needs Go to build, `poetry` + the
+engine to run). `make install` is optional if you do want it on your PATH.
 
 Overrides: `AURACHROME_ENGINE="poetry run aurachrome"` (the command) and
 `AURACHROME_REPO=/path/to/repo` (working dir). Tests: `go test ./tui` (headless

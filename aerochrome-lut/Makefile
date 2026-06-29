@@ -9,7 +9,8 @@
 REPO    := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 GO      ?= go
 POETRY  ?= poetry
-BIN     := aurachrome-tui
+BIN     := aurachrome            # installed command name / launcher script
+BINOUT  := tui/aurachrome         # compiled Go binary (gitignored; launcher execs it)
 PREFIX  ?= $(HOME)/.local
 LDFLAGS := -X main.defaultRepo=$(REPO)
 
@@ -52,10 +53,10 @@ dev: ## Install dev tools (pytest)
 all: deps tui ## Install deps and build the TUI
 
 tui: ## Build the Go TUI binary (engine path baked in)
-	cd $(REPO)/tui && $(GO) build -ldflags "$(LDFLAGS)" -o $(REPO)/$(BIN) .
-	@echo "built ./$(BIN)"
+	cd $(REPO)/tui && $(GO) build -ldflags "$(LDFLAGS)" -o $(REPO)/$(BINOUT) .
+	@echo "built ./$(BINOUT)  (run ./$(BIN) from the repo root)"
 
-run: tui ## Build and launch the TUI
+run: ## Launch the TUI (the ./aurachrome launcher builds it if needed)
 	./$(BIN)
 
 convert: ## Run the engine CLI:  make convert ARGS="-i RAWS -o OUT --gpu"
@@ -63,7 +64,7 @@ convert: ## Run the engine CLI:  make convert ARGS="-i RAWS -o OUT --gpu"
 
 install: tui ## Install the TUI into PREFIX/bin (default ~/.local/bin)
 	@mkdir -p $(PREFIX)/bin
-	install -m 0755 $(BIN) $(PREFIX)/bin/$(BIN)
+	install -m 0755 $(REPO)/$(BINOUT) $(PREFIX)/bin/$(BIN)
 	@echo "installed $(PREFIX)/bin/$(BIN)  (engine repo baked: $(REPO))"
 
 uninstall: ## Remove the installed TUI binary
@@ -83,4 +84,4 @@ doctor: ## Check prerequisites + GPU availability
 	@printf "backend: "; $(POETRY) run python -c "from aerochrome import backend; print(backend.device_name())" 2>/dev/null || echo "n/a (run 'make deps')"
 
 clean: ## Remove build artifacts
-	rm -f $(BIN) $(REPO)/tui/$(BIN)
+	rm -f $(REPO)/$(BINOUT) $(REPO)/tui/aurachrome-tui $(REPO)/aurachrome-tui

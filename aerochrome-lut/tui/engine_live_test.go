@@ -20,7 +20,8 @@ func TestEngineBridgeLive(t *testing.T) {
 		t.Skip("set AURA_TEST_INPUT to a RAW/image file or folder")
 	}
 	out := t.TempDir()
-	cfg := runConfig{input: in, output: out, look: "classic", grain: false, device: "cpu", jobs: 1}
+	cfg := runConfig{input: in, output: out, look: "classic", format: "tiff16",
+		grain: false, ir: "auto", device: "cpu", jobs: 1}
 
 	msg := startEngine(cfg)()
 	rdy, ok := msg.(engReadyMsg)

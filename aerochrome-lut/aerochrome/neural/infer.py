@@ -86,9 +86,13 @@ def predict_nir(rgb, weights_path=None, tile=1024, overlap=128, device="cuda",
 
     _, _, H, W = t.shape
     stride = max(1, tile - overlap)
-    # reflect-pad so every output pixel sees full context and edges stay full-size
-    pad = overlap // 2
-    t = torch.nn.functional.pad(t, (pad, pad, pad, pad), mode="reflect")
+    # reflect-pad so every output pixel sees full context and edges stay full-size.
+    # reflect mode requires pad < dim, so clamp for unusually small inputs (real
+    # 33 MP frames never bind here; tiny test/preview images would otherwise crash).
+    pad = min(overlap // 2, H - 1, W - 1)
+    pad = max(0, pad)
+    if pad:
+        t = torch.nn.functional.pad(t, (pad, pad, pad, pad), mode="reflect")
     _, _, Hp, Wp = t.shape
 
     acc = torch.zeros((1, 1, Hp, Wp), device=device)

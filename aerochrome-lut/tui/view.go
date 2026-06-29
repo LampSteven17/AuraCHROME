@@ -68,16 +68,19 @@ func (m model) inputView() string {
 }
 
 func (m model) outputView() string {
-	return labelStyle.Render("Write the 16-bit TIFFs to:") + "\n\n" + m.inOutput.View() +
-		"\n\n" + dimStyle.Render("lossless · sRGB · flows into Lightroom → Photoshop")
+	return labelStyle.Render("Write the output to:") + "\n\n" + m.inOutput.View() +
+		"\n\n" + dimStyle.Render("sRGB · format chosen next · flows into Lightroom → Photoshop")
 }
 
 func (m model) optionsView() string {
 	rows := []string{
 		m.choiceRow(0, "Look", looks, m.lookIdx),
-		m.toggleRow(1, "Grain", m.grain, "chromatic film grain"),
-		m.choiceRow(2, "Device", devices, m.devIdx),
-		m.jobsRow(3),
+		m.choiceRow(1, "Format", formats, m.formatIdx),
+		m.choiceRow(2, "Size", resLabels, m.resIdx),
+		m.toggleRow(3, "Grain", m.grain, "chromatic film grain"),
+		m.choiceRow(4, "IR", irModes, m.irIdx),
+		m.choiceRow(5, "Device", devices, m.devIdx),
+		m.jobsRow(6),
 	}
 	return strings.Join(rows, "\n")
 }
@@ -129,7 +132,10 @@ func (m model) runView() string {
 	}
 	head := m.spin.View() + " " + valStyle.Render("rendering")
 	if m.device != "" {
-		head += dimStyle.Render("  ["+m.device+"]")
+		head += dimStyle.Render("  [" + m.device + "]")
+	}
+	if m.ir != "" {
+		head += dimStyle.Render("  IR: " + m.ir)
 	}
 	bar := m.prog.ViewAs(frac)
 	count := dimStyle.Render(fmt.Sprintf("%d / %d images", m.done, m.total))

@@ -17,19 +17,29 @@ import (
 
 // runConfig is everything the wizard collected.
 type runConfig struct {
-	input  string
-	output string
-	look   string // classic|punchy|muted|portrait|all
-	grain  bool
-	device string // auto|cpu|gpu
-	jobs   int
+	input    string
+	output   string
+	look     string // classic|punchy|muted|portrait|all
+	format   string // tiff16|jpeg|both
+	longedge int    // downscale long edge to N px; 0 = full resolution
+	grain    bool
+	ir       string // auto|neural|grvi (grvi forces the per-pixel index)
+	device   string // auto|cpu|gpu
+	jobs     int
 }
 
 // engineArgs builds the CLI args for `aurachrome` from the wizard config.
 func (c runConfig) args() []string {
-	a := []string{"-i", c.input, "-o", c.output, "--preset", c.look, "--progress-json"}
+	a := []string{"-i", c.input, "-o", c.output, "--preset", c.look,
+		"--format", c.format, "--progress-json"}
 	if !c.grain {
 		a = append(a, "--no-grain")
+	}
+	if c.ir == "grvi" {
+		a = append(a, "--no-neural")
+	}
+	if c.longedge > 0 {
+		a = append(a, "--longedge", strconv.Itoa(c.longedge))
 	}
 	switch c.device {
 	case "cpu":
@@ -91,6 +101,7 @@ func repoRoot() string {
 type engStartMsg struct {
 	total  int
 	device string
+	ir     string
 	outdir string
 }
 type engImageMsg struct {
@@ -131,7 +142,7 @@ func startEngine(cfg runConfig) tea.Cmd {
 				}
 				switch ev["event"] {
 				case "start":
-					ch <- engStartMsg{total: toInt(ev["total"]), device: toStr(ev["device"]), outdir: toStr(ev["outdir"])}
+					ch <- engStartMsg{total: toInt(ev["total"]), device: toStr(ev["device"]), ir: toStr(ev["ir"]), outdir: toStr(ev["outdir"])}
 				case "image":
 					ch <- engImageMsg{done: toInt(ev["done"]), total: toInt(ev["total"]), file: toStr(ev["file"]), preset: toStr(ev["preset"])}
 				case "done":

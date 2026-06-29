@@ -91,6 +91,40 @@ def save_tiff16(path, rgb01):
         tifffile.imwrite(path, img, photometric="rgb")
 
 
+def save_jpeg(path, rgb01, quality=95):
+    """Write an 8-bit sRGB JPEG -- a quick-share / proof export beside the TIFF.
+    Quality 95 + no chroma subsampling keeps the false-color edges clean."""
+    from PIL import Image
+    img = (np.clip(rgb01, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+    im = Image.fromarray(img, "RGB")
+    icc = None
+    try:
+        from PIL import ImageCms
+        icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    except Exception:
+        icc = None
+    im.save(path, "JPEG", quality=quality, subsampling=0, icc_profile=icc)
+
+
+# format -> (extension, writer). "both" writes a TIFF and a JPEG per image.
+FORMATS = {
+    "tiff16": [(".tif", save_tiff16)],
+    "jpeg":   [(".jpg", save_jpeg)],
+    "both":   [(".tif", save_tiff16), (".jpg", save_jpeg)],
+}
+
+
+def write_outputs(outdir, name, rgb01, fmt):
+    """Write `rgb01` under `outdir/name` in the requested format(s); return the
+    primary path (TIFF when present, else the JPEG) for progress reporting."""
+    paths = []
+    for ext, writer in FORMATS[fmt]:
+        dst = os.path.join(outdir, name + ext)
+        writer(dst, rgb01)
+        paths.append(dst)
+    return paths[0]
+
+
 # ---- core -----------------------------------------------------------------
 def _transform_chunked(arr, p, nir=None, chunk_px=2_000_000):
     """Apply the transform in flat pixel chunks to bound (CPU or GPU) memory.
@@ -149,12 +183,13 @@ def _maybe_downscale(arr, longedge):
     return arr
 
 
-def process_one(src, n, outdir, presets, add_grain, longedge, use_gpu, use_neural=False):
+def process_one(src, n, outdir, presets, add_grain, longedge, use_gpu,
+                use_neural=False, fmt="tiff16"):
     """Convert one input file across all requested presets. Returns
     (source_basename, dims, [(preset, dst_path), ...]). Top-level so it is
     picklable for the multiprocessing path. `use_neural` is forced False in
     forked CPU workers (CUDA + multiprocessing don't mix); the neural NIR runs
-    only on the serial path."""
+    only on the serial path. `fmt` selects the output format(s) (see FORMATS)."""
     arr = _maybe_downscale(load_image(src), longedge)
     dev = backend.to_device(arr, use_gpu)
     stem = os.path.splitext(os.path.basename(src))[0]
@@ -163,21 +198,20 @@ def process_one(src, n, outdir, presets, add_grain, longedge, use_gpu, use_neura
         out = backend.to_numpy(convert(dev, pre, add_grain=add_grain,
                                        seed=n * 101 + idx, use_neural=use_neural))
         name = stem if len(presets) == 1 else f"{pre}-{stem}"
-        dst = os.path.join(outdir, name + ".tif")
-        save_tiff16(dst, out)
+        dst = write_outputs(outdir, name, out, fmt)
         results.append((pre, dst))
     return stem, (arr.shape[1], arr.shape[0]), results
 
 
 def run(inputs, outdir, presets, add_grain, longedge=0, use_gpu=False, jobs=1,
-        progress_json=False):
+        progress_json=False, fmt="tiff16", no_neural=False):
     os.makedirs(outdir, exist_ok=True)
     total = len(inputs) * len(presets)
     done = 0
     serial = use_gpu or jobs <= 1 or len(inputs) <= 1
     mode = backend.device_name() if use_gpu else (
         f"cpu x{jobs}" if not serial else "cpu (serial)")
-    neural_on = serial and neural.is_available()
+    neural_on = serial and not no_neural and neural.is_available()
     ir_src = "neural NIR" if neural_on else "GRVI index"
 
     def emit(obj):
@@ -186,9 +220,10 @@ def run(inputs, outdir, presets, add_grain, longedge=0, use_gpu=False, jobs=1,
 
     if progress_json:
         emit({"event": "start", "total": total, "files": len(inputs),
-              "looks": len(presets), "device": mode, "ir": ir_src, "outdir": outdir})
+              "looks": len(presets), "device": mode, "ir": ir_src,
+              "format": fmt, "outdir": outdir})
     else:
-        print(DIM(f"device: {mode}   |   IR: {ir_src}   |   "
+        print(DIM(f"device: {mode}   |   IR: {ir_src}   |   format: {fmt}   |   "
                   f"{len(inputs)} file(s) x {len(presets)} look(s)\n"))
 
     def report(stem, dims, results):
@@ -209,12 +244,13 @@ def run(inputs, outdir, presets, add_grain, longedge=0, use_gpu=False, jobs=1,
     if serial:
         for n, src in enumerate(inputs, start=1):
             stem, dims, results = process_one(
-                src, n, outdir, presets, add_grain, longedge, use_gpu, neural_on)
+                src, n, outdir, presets, add_grain, longedge, use_gpu,
+                neural_on, fmt)
             report(stem, dims, results)
     else:
         with ProcessPoolExecutor(max_workers=jobs) as ex:
             futs = {ex.submit(process_one, src, n, outdir, presets,
-                              add_grain, longedge, False): n
+                              add_grain, longedge, False, False, fmt): n
                     for n, src in enumerate(inputs, start=1)}
             for fut in as_completed(futs):
                 stem, dims, results = fut.result()
@@ -267,7 +303,7 @@ def tui():
     add_grain = (gidx == 0)
 
     default_out = os.path.join(
-        ipath if os.path.isdir(ipath) else os.path.dirname(ipath), "aerochrome_tif")
+        ipath if os.path.isdir(ipath) else os.path.dirname(ipath), "aurachrome_out")
     outdir = os.path.expanduser(_ask("\nOutput folder", default_out).strip('"').strip("'"))
 
     print(BOLD("\nSummary:"))
@@ -290,7 +326,11 @@ def main():
     ap.add_argument("-i", "--input", help="RAW/image file or a folder of them")
     ap.add_argument("-o", "--outdir", help="output folder")
     ap.add_argument("--preset", choices=PRESET_NAMES + ["all"], default="classic")
+    ap.add_argument("--format", choices=list(FORMATS), default="tiff16",
+                    help="output format: tiff16 (16-bit), jpeg, or both")
     ap.add_argument("--no-grain", action="store_true", help="disable the grain pass")
+    ap.add_argument("--no-neural", action="store_true",
+                    help="force the GRVI index even if the learned NIR model is available")
     ap.add_argument("--longedge", type=int, default=0,
                     help="downscale long edge to N px (0 = full resolution)")
     ap.add_argument("--gpu", action="store_true", help="force the CUDA (CuPy) backend")
@@ -310,7 +350,7 @@ def main():
     presets = PRESET_NAMES if args.preset == "all" else [args.preset]
     outdir = args.outdir or os.path.join(
         args.input if os.path.isdir(args.input) else os.path.dirname(args.input),
-        "aerochrome_tif")
+        "aurachrome_out")
 
     # device resolution: explicit flags win; otherwise auto-use a GPU if present
     if args.cpu:
@@ -325,7 +365,8 @@ def main():
 
     run(inputs, outdir, presets, add_grain=not args.no_grain,
         longedge=args.longedge, use_gpu=use_gpu, jobs=jobs,
-        progress_json=args.progress_json)
+        progress_json=args.progress_json, fmt=args.format,
+        no_neural=args.no_neural)
 
 
 if __name__ == "__main__":

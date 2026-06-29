@@ -26,12 +26,19 @@ const (
 )
 
 var (
-	looks   = []string{"classic", "punchy", "muted", "portrait", "all"}
-	devices = []string{"auto", "cpu", "gpu"}
-	rawExts = map[string]bool{".arw": true, ".cr2": true, ".cr3": true, ".nef": true,
+	looks     = []string{"classic", "punchy", "muted", "portrait", "all"}
+	formats   = []string{"tiff16", "jpeg", "both"}
+	resLabels = []string{"full", "4096px", "2048px"}
+	resPx     = []int{0, 4096, 2048} // long-edge px; 0 = full resolution
+	irModes   = []string{"auto", "neural", "grvi"}
+	devices   = []string{"auto", "cpu", "gpu"}
+	rawExts   = map[string]bool{".arw": true, ".cr2": true, ".cr3": true, ".nef": true,
 		".raf": true, ".rw2": true, ".dng": true, ".orf": true, ".raw": true,
 		".tif": true, ".tiff": true, ".png": true, ".jpg": true, ".jpeg": true}
 )
+
+// lastOpt is the index of the final selectable row in the Options step.
+const lastOpt = 6
 
 type model struct {
 	step          step
@@ -42,7 +49,10 @@ type model struct {
 
 	optCursor int
 	lookIdx   int
+	formatIdx int
+	resIdx    int
 	grain     bool
+	irIdx     int
 	devIdx    int
 	jobs      int
 
@@ -53,6 +63,7 @@ type model struct {
 	total   int
 	done    int
 	device  string
+	ir      string
 	outdir  string
 	logLines []string
 
@@ -118,7 +129,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancel = msg.cancel
 		return m, waitForEngine(m.engCh)
 	case engStartMsg:
-		m.total, m.device, m.outdir = msg.total, msg.device, msg.outdir
+		m.total, m.device, m.ir, m.outdir = msg.total, msg.device, msg.ir, msg.outdir
 		return m, waitForEngine(m.engCh)
 	case engImageMsg:
 		m.done = msg.done
@@ -214,7 +225,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.optCursor--
 			}
 		case "down", "j", "tab":
-			if m.optCursor < 3 {
+			if m.optCursor < lastOpt {
 				m.optCursor++
 			}
 		case "left", "h":
@@ -264,10 +275,16 @@ func (m *model) adjust(d int) {
 	case 0:
 		m.lookIdx = wrap(m.lookIdx+d, len(looks))
 	case 1:
-		m.grain = !m.grain
+		m.formatIdx = wrap(m.formatIdx+d, len(formats))
 	case 2:
-		m.devIdx = wrap(m.devIdx+d, len(devices))
+		m.resIdx = wrap(m.resIdx+d, len(resLabels))
 	case 3:
+		m.grain = !m.grain
+	case 4:
+		m.irIdx = wrap(m.irIdx+d, len(irModes))
+	case 5:
+		m.devIdx = wrap(m.devIdx+d, len(devices))
+	case 6:
 		m.jobs += d
 		if m.jobs < 1 {
 			m.jobs = 1
@@ -280,12 +297,15 @@ func (m *model) adjust(d int) {
 
 func (m model) config() runConfig {
 	return runConfig{
-		input:  expand(strings.TrimSpace(m.inInput.Value())),
-		output: expand(strings.TrimSpace(m.inOutput.Value())),
-		look:   looks[m.lookIdx],
-		grain:  m.grain,
-		device: devices[m.devIdx],
-		jobs:   m.jobs,
+		input:    expand(strings.TrimSpace(m.inInput.Value())),
+		output:   expand(strings.TrimSpace(m.inOutput.Value())),
+		look:     looks[m.lookIdx],
+		format:   formats[m.formatIdx],
+		longedge: resPx[m.resIdx],
+		grain:    m.grain,
+		ir:       irModes[m.irIdx],
+		device:   devices[m.devIdx],
+		jobs:     m.jobs,
 	}
 }
 
@@ -312,9 +332,9 @@ func expand(p string) string {
 func defaultOutput(input string) string {
 	info, err := os.Stat(input)
 	if err == nil && info.IsDir() {
-		return filepath.Join(input, "aurachrome_tif")
+		return filepath.Join(input, "aurachrome_out")
 	}
-	return filepath.Join(filepath.Dir(input), "aurachrome_tif")
+	return filepath.Join(filepath.Dir(input), "aurachrome_out")
 }
 
 func countInputs(path string) int {
