@@ -1,5 +1,23 @@
 # Aurachrome — false-color film engine
 
+<p align="center">
+  <img src="docs/media/splash.gif" alt="Aurachrome — animated TUI splash" width="90%">
+</p>
+
+### Before / after
+
+The bar sweeps across to reveal the conversion — foliage → infrared magenta, a
+portrait, and a red → green sign:
+
+<p align="center">
+  <img src="docs/media/wipe_waterfall.gif" alt="foliage to infrared magenta" width="30%">
+  <img src="docs/media/wipe_portrait.gif" alt="portrait" width="30%">
+  <img src="docs/media/wipe_redgreen.gif" alt="red to green" width="30%">
+</p>
+
+<sub>These auto-wipe rather than drag — GitHub READMEs can't run JavaScript, so a
+true draggable slider would need a GitHub Pages docs site.</sub>
+
 **Aurachrome** is a Python engine that renders the Kodak Aerochrome / EIR
 color-infrared "false color" look from camera RAW to lossless 16-bit TIFF (CPU or
 CUDA GPU), for a **Sony A7C II** stills workflow into Lightroom → Photoshop. It
