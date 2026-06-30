@@ -22,7 +22,7 @@ type runConfig struct {
 	look     string // classic|punchy|muted|portrait|all
 	format   string // tiff16|jpeg|both
 	longedge int    // downscale long edge to N px; 0 = full resolution
-	grain    bool
+	grain    string // off|subtle|standard|heavy
 	ir       string // auto|neural|grvi (grvi forces the per-pixel index)
 	device   string // auto|cpu|gpu
 	jobs     int
@@ -31,10 +31,7 @@ type runConfig struct {
 // engineArgs builds the CLI args for `aurachrome` from the wizard config.
 func (c runConfig) args() []string {
 	a := []string{"-i", c.input, "-o", c.output, "--preset", c.look,
-		"--format", c.format, "--progress-json"}
-	if !c.grain {
-		a = append(a, "--no-grain")
-	}
+		"--format", c.format, "--grain", c.grain, "--progress-json"}
 	if c.ir == "grvi" {
 		a = append(a, "--no-neural")
 	}
@@ -96,13 +93,46 @@ func repoRoot() string {
 	return cwd
 }
 
+// gpuProbeMsg reports whether the engine sees a CUDA device. Sent once at startup.
+type gpuProbeMsg struct {
+	avail bool
+	name  string
+}
+
+// probeGPU asks the engine (`aurachrome --probe-gpu`) for device availability so
+// the wizard can default to GPU and warn before a slow CPU render.
+func probeGPU() tea.Cmd {
+	return func() tea.Msg {
+		base := []string{"poetry", "run", "aurachrome"}
+		if env := strings.TrimSpace(os.Getenv("AURACHROME_ENGINE")); env != "" {
+			base = strings.Fields(env)
+		}
+		args := append(append([]string{}, base[1:]...), "--probe-gpu")
+		cmd := exec.Command(base[0], args...)
+		cmd.Dir = repoRoot()
+		out, err := cmd.Output()
+		if err != nil {
+			return gpuProbeMsg{} // treat as no GPU; the engine still falls back safely
+		}
+		var r struct {
+			Gpu  bool   `json:"gpu"`
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(out, &r) != nil {
+			return gpuProbeMsg{}
+		}
+		return gpuProbeMsg{avail: r.Gpu, name: r.Name}
+	}
+}
+
 // ---- streaming messages ----------------------------------------------------
 
 type engStartMsg struct {
-	total  int
-	device string
-	ir     string
-	outdir string
+	total   int
+	device  string
+	ir      string
+	outdir  string
+	warning string
 }
 type engImageMsg struct {
 	done, total int
@@ -142,7 +172,7 @@ func startEngine(cfg runConfig) tea.Cmd {
 				}
 				switch ev["event"] {
 				case "start":
-					ch <- engStartMsg{total: toInt(ev["total"]), device: toStr(ev["device"]), ir: toStr(ev["ir"]), outdir: toStr(ev["outdir"])}
+					ch <- engStartMsg{total: toInt(ev["total"]), device: toStr(ev["device"]), ir: toStr(ev["ir"]), outdir: toStr(ev["outdir"]), warning: toStr(ev["warning"])}
 				case "image":
 					ch <- engImageMsg{done: toInt(ev["done"]), total: toInt(ev["total"]), file: toStr(ev["file"]), preset: toStr(ev["preset"])}
 				case "done":
@@ -175,14 +205,20 @@ type engineError struct {
 }
 
 func (e *engineError) Error() string {
+	msg := e.err.Error()
 	if e.stderr != "" {
 		tail := e.stderr
 		if len(tail) > 400 {
 			tail = "…" + tail[len(tail)-400:]
 		}
-		return e.err.Error() + "\n" + tail
+		msg += "\n" + tail
 	}
-	return e.err.Error()
+	// Most common first-run failure: the engine venv was never `poetry install`-ed.
+	if strings.Contains(e.stderr, "ModuleNotFoundError") ||
+		strings.Contains(e.stderr, "not installed as a script") {
+		msg += "\n\nhint: the engine isn't set up — run `poetry install` in the repo root."
+	}
+	return msg
 }
 
 func toInt(v any) int {

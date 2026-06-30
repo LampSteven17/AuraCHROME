@@ -10,13 +10,15 @@ import (
 func (m model) View() string {
 	switch m.step {
 	case stepSplash:
-		return splashView(m.width)
+		return splashView(m.width, m.splashPhase)
 	case stepInput:
 		return m.frame("Input", 1, m.inputView())
 	case stepOutput:
 		return m.frame("Output", 2, m.outputView())
 	case stepOptions:
 		return m.frame("Options", 3, m.optionsView())
+	case stepConfirm:
+		return m.frame("Confirm", 3, m.confirmView())
 	case stepRun:
 		return m.frame("Render", 4, m.runView())
 	case stepDone:
@@ -42,7 +44,12 @@ func (m model) frame(title string, n int, body string) string {
 func (m model) footer() string {
 	switch m.step {
 	case stepInput:
-		return "enter: next   ·   ctrl+c: quit"
+		if m.typing {
+			return "enter: use path   ·   esc: back   ·   ctrl+c: quit"
+		}
+		return "enter: choose folder / continue   ·   r: re-choose   ·   ctrl+c: quit"
+	case stepConfirm:
+		return "y: render on CPU   ·   n/esc: back"
 	case stepOutput:
 		return "enter: next   ·   esc: back   ·   ctrl+c: quit"
 	case stepOptions:
@@ -56,15 +63,52 @@ func (m model) footer() string {
 }
 
 func (m model) inputView() string {
-	s := labelStyle.Render("Where are your photos?") + "\n\n" + m.inInput.View()
-	if m.err != nil {
-		s += "\n\n" + errStyle.Render("× "+m.err.Error())
-	} else if v := strings.TrimSpace(m.inInput.Value()); v != "" {
-		if n := countInputs(expand(v)); n > 0 {
-			s += "\n\n" + dimStyle.Render(fmt.Sprintf("found %d file(s)", n))
+	title := labelStyle.Render("Select the folder with your photos") + "\n\n"
+
+	// Manual-path fallback field.
+	if m.typing {
+		s := title + m.inInput.View() + "\n" +
+			dimStyle.Render("enter: use this path   ·   esc: back to the picker")
+		if m.err != nil {
+			s += "\n\n" + errStyle.Render("x "+m.err.Error())
 		}
+		return s
+	}
+
+	// Dialog is open.
+	if m.picking {
+		return title + stepStyle.Render("opening folder picker…") + "\n" +
+			dimStyle.Render("a window should appear over the terminal — pick a folder there")
+	}
+
+	// A folder is chosen: show it + file count + how to proceed.
+	if v := strings.TrimSpace(m.inInput.Value()); v != "" {
+		s := title + valStyle.Render(v) + "\n"
+		if n := countInputs(expand(v)); n > 0 {
+			s += okStyle.Render(fmt.Sprintf("found %d file(s)", n)) + "\n\n" +
+				stepStyle.Render("press enter to continue") +
+				dimStyle.Render("    ·    r: choose a different folder")
+		} else {
+			s += errStyle.Render("no photos found in this folder") + "\n\n" +
+				dimStyle.Render("r: choose a different folder")
+		}
+		return s
+	}
+
+	// Nothing chosen yet — the default landing state.
+	s := title + stepStyle.Render("press enter") +
+		dimStyle.Render(" to open the folder picker")
+	if m.err != nil {
+		s += "\n\n" + errStyle.Render("x "+m.err.Error()) +
+			"\n" + dimStyle.Render("t: type a path manually instead")
 	}
 	return s
+}
+
+func (m model) confirmView() string {
+	return stepStyle.Render("! "+m.confirmMsg) + "\n\n" +
+		labelStyle.Render("y") + dimStyle.Render(": render on CPU    ") +
+		labelStyle.Render("n") + dimStyle.Render(": go back and change the device")
 }
 
 func (m model) outputView() string {
@@ -77,7 +121,7 @@ func (m model) optionsView() string {
 		m.choiceRow(0, "Look", looks, m.lookIdx),
 		m.choiceRow(1, "Format", formats, m.formatIdx),
 		m.choiceRow(2, "Size", resLabels, m.resIdx),
-		m.toggleRow(3, "Grain", m.grain, "chromatic film grain"),
+		m.choiceRow(3, "Grain", grainLevels, m.grainIdx),
 		m.choiceRow(4, "IR", irModes, m.irIdx),
 		m.choiceRow(5, "Device", devices, m.devIdx),
 		m.jobsRow(6),
@@ -106,23 +150,18 @@ func (m model) choiceRow(row int, label string, opts []string, idx int) string {
 	return b.String()
 }
 
-func (m model) toggleRow(row int, label string, on bool, note string) string {
-	var b strings.Builder
-	b.WriteString(m.cursor(row))
-	b.WriteString(labelStyle.Render(fmt.Sprintf("%-8s", label)))
-	if on {
-		b.WriteString(selChip.Render("on") + offChip.Render("off"))
-	} else {
-		b.WriteString(offChip.Render("on") + selChip.Render("off"))
-	}
-	b.WriteString("  " + dimStyle.Render(note))
-	return b.String()
-}
-
 func (m model) jobsRow(row int) string {
-	note := "CPU workers (ignored on GPU)"
+	if m.rowDisabled(row) {
+		note := "· auto-managed — set Device to cpu to tune workers"
+		if devices[m.devIdx] == "gpu" {
+			note = "· skipped — GPU renders on-device"
+		}
+		return "  " + dimStyle.Render(fmt.Sprintf("%-8s", "Jobs")) +
+			dimStyle.Render(fmt.Sprintf("%d", m.jobs)) + "  " +
+			dimStyle.Render(note)
+	}
 	return m.cursor(row) + labelStyle.Render(fmt.Sprintf("%-8s", "Jobs")) +
-		selChip.Render(fmt.Sprintf("%d", m.jobs)) + "  " + dimStyle.Render(note)
+		selChip.Render(fmt.Sprintf("%d", m.jobs)) + "  " + dimStyle.Render("CPU workers")
 }
 
 func (m model) runView() string {
@@ -140,7 +179,12 @@ func (m model) runView() string {
 	bar := m.prog.ViewAs(frac)
 	count := dimStyle.Render(fmt.Sprintf("%d / %d images", m.done, m.total))
 	log := strings.Join(m.logLines, "\n")
-	return lipgloss.JoinVertical(lipgloss.Left, head, "", bar, count, "", log)
+	rows := []string{head}
+	if m.warn != "" {
+		rows = append(rows, stepStyle.Render("! "+m.warn))
+	}
+	rows = append(rows, "", bar, count, "", log)
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
 func (m model) doneView() string {

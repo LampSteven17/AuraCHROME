@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Launcher for the Aurachrome TUI.
+#
+# Just `cd` into this folder and run `./aurachrome` — no PATH install needed.
+# It builds the Go binary on first run (or whenever a tui/*.go source is newer
+# than the binary), bootstraps the Python engine's virtualenv if needed, then
+# execs the TUI. The compiled binary lives at tui/aurachrome and is gitignored;
+# this script is the only tracked entry point.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bin="$here/tui/aurachrome"
+
+needs_build=0
+if [[ ! -x "$bin" ]]; then
+	needs_build=1
+else
+	for src in "$here"/tui/*.go; do
+		[[ "$src" -nt "$bin" ]] && { needs_build=1; break; }
+	done
+fi
+
+if [[ "$needs_build" == 1 ]]; then
+	command -v go >/dev/null 2>&1 || {
+		echo "aurachrome: Go is required to build the TUI — https://go.dev/dl/" >&2
+		exit 1
+	}
+	echo "building aurachrome TUI…" >&2
+	( cd "$here/tui" && go build -ldflags "-X main.defaultRepo=$here" -o "$bin" . )
+fi
+
+# Ensure the Python engine's virtualenv is ready. The TUI shells out to
+# `poetry run aurachrome`; if the project was never `poetry install`-ed, that
+# dies with ModuleNotFoundError (no numpy) before rendering a single frame.
+# Bootstrap it once, idempotently. Skipped entirely when AURACHROME_ENGINE
+# overrides the runner (the user manages their own environment).
+if [[ -z "${AURACHROME_ENGINE:-}" ]]; then
+	if command -v poetry >/dev/null 2>&1; then
+		venv="$(cd "$here" && poetry env info -p 2>/dev/null || true)"
+		if [[ -z "$venv" || ! -x "$venv/bin/aurachrome" ]]; then
+			echo "setting up the Aurachrome engine (one-time poetry install)…" >&2
+			( cd "$here" && poetry install --only main ) || {
+				echo "aurachrome: 'poetry install' failed — run it by hand in $here" >&2
+				exit 1
+			}
+		fi
+	else
+		echo "aurachrome: poetry not found — the engine needs it (https://python-poetry.org/)." >&2
+		echo "            install poetry, or point AURACHROME_ENGINE at your own runner." >&2
+		exit 1
+	fi
+fi
+
+exec "$bin" "$@"

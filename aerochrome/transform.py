@@ -154,6 +154,12 @@ def aerochrome(rgb, p=None, nir=None):
     oh = oh + xp.radians(p['cyan_to_blue']) * cyan
     oC = oC * (1.0 + p['blue_deepen'] * cyan)
 
+    # skin grade: pull skin OUTPUT chroma down (waxy pale, less green) and
+    # optionally lean it cooler. `skin` is the stage-2b mask. 0 = no change.
+    if p.get('skin_desat', 0.0) or p.get('skin_cool', 0.0):
+        oC = oC * (1.0 - p.get('skin_desat', 0.0) * skin)
+        oh = oh + xp.radians(p.get('skin_cool', 0.0)) * skin
+
     out_lch = xp.stack([oL, oC, oh], axis=-1)
     out_lin = enc.oklab_to_linear_rgb(enc.oklch_to_oklab(out_lch))
     # tiny warm bias so de-teal'd neutrals/clouds aren't dead gray

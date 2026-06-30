@@ -28,30 +28,6 @@ var (
 	helpStyle   = lipgloss.NewStyle().Foreground(cDim)
 )
 
-// gradientText colors each rune along a magenta->cyan ramp.
-func gradientText(s string) string {
-	from := []int{0xff, 0x4f, 0xd8}
-	to := []int{0x36, 0xe3, 0xff}
-	runes := []rune(s)
-	n := len(runes)
-	if n == 0 {
-		return s
-	}
-	out := ""
-	for i, r := range runes {
-		t := 0.0
-		if n > 1 {
-			t = float64(i) / float64(n-1)
-		}
-		cr := int(float64(from[0]) + (float64(to[0])-float64(from[0]))*t)
-		cg := int(float64(from[1]) + (float64(to[1])-float64(from[1]))*t)
-		cb := int(float64(from[2]) + (float64(to[2])-float64(from[2]))*t)
-		hex := lipgloss.Color(rgbHex(cr, cg, cb))
-		out += lipgloss.NewStyle().Foreground(hex).Bold(true).Render(string(r))
-	}
-	return out
-}
-
 func rgbHex(r, g, b int) string {
 	const hexdigits = "0123456789abcdef"
 	clamp := func(v int) int {

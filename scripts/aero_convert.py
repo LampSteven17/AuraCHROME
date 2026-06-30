@@ -28,11 +28,16 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from aerochrome import backend, grain as _grain, neural, params, transform  # noqa: E402
+from aerochrome import (  # noqa: E402
+    backend, grain as _grain, halation as _halation, neural, params, stocks, transform)
 
 RAW_EXTS = {".arw", ".cr2", ".cr3", ".nef", ".raf", ".rw2", ".dng", ".orf", ".raw"}
 IMG_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
-PRESET_NAMES = list(params.PRESETS)
+STOCK_NAMES = stocks.names()  # aerochrome looks + redscale
+
+# Grain amount -> multiplier on each preset's tuned grain_strength. "standard"
+# keeps the per-preset look exactly as authored; the others scale around it.
+GRAIN_SCALE = {"off": 0.0, "subtle": 0.6, "standard": 1.0, "heavy": 1.6}
 
 # ---- ANSI niceties (degrade gracefully if not a TTY) ----------------------
 def _c(code, s):
@@ -143,19 +148,40 @@ def _transform_chunked(arr, p, nir=None, chunk_px=2_000_000):
     return out.reshape(h, w, 3)
 
 
-def convert(arr, preset, add_grain=True, seed=0, use_neural=None):
+def convert(arr, preset, add_grain=True, seed=0, use_neural=None, grain_scale=1.0):
     """Transform + optional grain. Runs on whichever device owns `arr`.
 
     When the learned RGB->NIR model is available (torch + CUDA + weights), it
     predicts a NIR channel that drives the look as the default IR source; absent
-    that, the per-pixel GRVI index synthesizes IR (automatic fallback)."""
-    p = params.get(preset)
-    if use_neural is None:
-        use_neural = neural.is_available()
-    nir = neural.predict_nir(arr) if use_neural else None
-    out = _transform_chunked(arr, p, nir=nir)
-    if add_grain and p.get("grain_strength", 0) > 0:
-        out = _grain.chromatic_grain(out, p["grain_strength"], p["grain_size"],
+    that, the per-pixel GRVI index synthesizes IR (automatic fallback).
+
+    `grain_scale` multiplies the preset's tuned grain strength (e.g. 0.6 subtle,
+    1.0 standard, 1.6 heavy); add_grain=False disables the pass entirely.
+
+    `preset` is a stock name (see aerochrome.stocks): the aerochrome family runs
+    the IR transform (neural NIR / GRVI); non-IR families (redscale) render
+    parametrically and skip the neural net entirely."""
+    stock = stocks.get(preset)
+    p = stock.params
+    nir = None
+    if stock.needs_ir:
+        if use_neural is None:
+            use_neural = neural.is_available()
+        if use_neural:
+            nir = neural.predict_nir(arr)
+    if stock.family == "aerochrome":
+        out = _transform_chunked(arr, p, nir=nir)        # memory-aware chunking
+    else:  # mono_ir uses nir; redscale ignores it; both render per-pixel
+        out = stocks.render(arr, stock, nir=nir)
+    # halation/bloom (HIE/Efke-AURA); off for stocks with halation_strength 0
+    hs = p.get("halation_strength", 0.0)
+    if hs > 0:
+        out = _halation.halation(out, hs, p.get("halation_size", 6.0),
+                                 p.get("halation_threshold", 0.72),
+                                 tuple(p.get("halation_tint", _halation.DEFAULT_TINT)))
+    strength = p.get("grain_strength", 0) * grain_scale
+    if add_grain and strength > 0:
+        out = _grain.chromatic_grain(out, strength, p["grain_size"],
                                      p.get("grain_chroma", 0.35), seed=seed)
     return out
 
@@ -184,7 +210,7 @@ def _maybe_downscale(arr, longedge):
 
 
 def process_one(src, n, outdir, presets, add_grain, longedge, use_gpu,
-                use_neural=False, fmt="tiff16"):
+                use_neural=False, fmt="tiff16", grain_scale=1.0):
     """Convert one input file across all requested presets. Returns
     (source_basename, dims, [(preset, dst_path), ...]). Top-level so it is
     picklable for the multiprocessing path. `use_neural` is forced False in
@@ -196,7 +222,8 @@ def process_one(src, n, outdir, presets, add_grain, longedge, use_gpu,
     results = []
     for idx, pre in enumerate(presets):
         out = backend.to_numpy(convert(dev, pre, add_grain=add_grain,
-                                       seed=n * 101 + idx, use_neural=use_neural))
+                                       seed=n * 101 + idx, use_neural=use_neural,
+                                       grain_scale=grain_scale))
         name = stem if len(presets) == 1 else f"{pre}-{stem}"
         dst = write_outputs(outdir, name, out, fmt)
         results.append((pre, dst))
@@ -204,24 +231,35 @@ def process_one(src, n, outdir, presets, add_grain, longedge, use_gpu,
 
 
 def run(inputs, outdir, presets, add_grain, longedge=0, use_gpu=False, jobs=1,
-        progress_json=False, fmt="tiff16", no_neural=False):
+        progress_json=False, fmt="tiff16", no_neural=False, gpu_requested=False,
+        grain_scale=1.0):
     os.makedirs(outdir, exist_ok=True)
     total = len(inputs) * len(presets)
     done = 0
     serial = use_gpu or jobs <= 1 or len(inputs) <= 1
     mode = backend.device_name() if use_gpu else (
         f"cpu x{jobs}" if not serial else "cpu (serial)")
-    neural_on = serial and not no_neural and neural.is_available()
-    ir_src = "neural NIR" if neural_on else "GRVI index"
+    any_ir = any(stocks.get(pre).needs_ir for pre in presets)
+    neural_on = any_ir and serial and not no_neural and neural.is_available()
+    ir_src = ("neural NIR" if neural_on else "GRVI index") if any_ir else "n/a"
+
+    # Surface a silent GPU fallback so the front-end can explain it.
+    warning = None
+    if gpu_requested and not use_gpu:
+        warning = ("GPU requested but the CUDA backend is unavailable — "
+                   "rendering on CPU. Install it with: poetry install --with gpu")
 
     def emit(obj):
         sys.stdout.write(json.dumps(obj) + "\n")
         sys.stdout.flush()
 
     if progress_json:
-        emit({"event": "start", "total": total, "files": len(inputs),
-              "looks": len(presets), "device": mode, "ir": ir_src,
-              "format": fmt, "outdir": outdir})
+        start = {"event": "start", "total": total, "files": len(inputs),
+                 "looks": len(presets), "device": mode, "ir": ir_src,
+                 "format": fmt, "outdir": outdir}
+        if warning:
+            start["warning"] = warning
+        emit(start)
     else:
         print(DIM(f"device: {mode}   |   IR: {ir_src}   |   format: {fmt}   |   "
                   f"{len(inputs)} file(s) x {len(presets)} look(s)\n"))
@@ -245,12 +283,12 @@ def run(inputs, outdir, presets, add_grain, longedge=0, use_gpu=False, jobs=1,
         for n, src in enumerate(inputs, start=1):
             stem, dims, results = process_one(
                 src, n, outdir, presets, add_grain, longedge, use_gpu,
-                neural_on, fmt)
+                neural_on, fmt, grain_scale)
             report(stem, dims, results)
     else:
         with ProcessPoolExecutor(max_workers=jobs) as ex:
             futs = {ex.submit(process_one, src, n, outdir, presets,
-                              add_grain, longedge, False, False, fmt): n
+                              add_grain, longedge, False, False, fmt, grain_scale): n
                     for n, src in enumerate(inputs, start=1)}
             for fut in as_completed(futs):
                 stem, dims, results = fut.result()
@@ -296,8 +334,9 @@ def tui():
         print(DIM("  no RAW/image files found there -- try again.\n"))
     print(DIM(f"  found {len(inputs)} file(s)\n"))
 
-    pidx = _menu("Look:", PRESET_NAMES + ["all four"], default_idx=0)
-    presets = PRESET_NAMES if pidx == len(PRESET_NAMES) else [PRESET_NAMES[pidx]]
+    aero_looks = stocks.family_names("aerochrome")
+    pidx = _menu("Look:", aero_looks + ["all four"], default_idx=0)
+    presets = aero_looks if pidx == len(aero_looks) else [aero_looks[pidx]]
 
     gidx = _menu("\nChromatic film grain:", ["on", "off"], default_idx=0)
     add_grain = (gidx == 0)
@@ -325,10 +364,13 @@ def main():
     ap = argparse.ArgumentParser(description="Aerochrome RAW -> 16-bit TIFF converter")
     ap.add_argument("-i", "--input", help="RAW/image file or a folder of them")
     ap.add_argument("-o", "--outdir", help="output folder")
-    ap.add_argument("--preset", choices=PRESET_NAMES + ["all"], default="classic")
+    ap.add_argument("--preset", choices=STOCK_NAMES + ["all"], default="classic")
     ap.add_argument("--format", choices=list(FORMATS), default="tiff16",
                     help="output format: tiff16 (16-bit), jpeg, or both")
-    ap.add_argument("--no-grain", action="store_true", help="disable the grain pass")
+    ap.add_argument("--grain", choices=list(GRAIN_SCALE), default="standard",
+                    help="grain amount: off | subtle | standard | heavy")
+    ap.add_argument("--no-grain", action="store_true",
+                    help="disable the grain pass (alias for --grain off)")
     ap.add_argument("--no-neural", action="store_true",
                     help="force the GRVI index even if the learned NIR model is available")
     ap.add_argument("--longedge", type=int, default=0,
@@ -339,7 +381,13 @@ def main():
                     help="CPU worker processes for batches (0 = auto, ignored on GPU)")
     ap.add_argument("--progress-json", action="store_true",
                     help="emit machine-readable JSON progress (one object per line) for the TUI")
+    ap.add_argument("--probe-gpu", action="store_true",
+                    help="print {\"gpu\": bool, \"name\": str} and exit (used by the TUI)")
     args = ap.parse_args()
+
+    if args.probe_gpu:
+        print(json.dumps({"gpu": backend.gpu_available(), "name": backend.device_name()}))
+        return
 
     if not args.input:
         tui()
@@ -347,7 +395,7 @@ def main():
     inputs = gather_inputs(os.path.expanduser(args.input))
     if not inputs:
         sys.exit(f"no RAW/image files at {args.input}")
-    presets = PRESET_NAMES if args.preset == "all" else [args.preset]
+    presets = stocks.family_names("aerochrome") if args.preset == "all" else [args.preset]
     outdir = args.outdir or os.path.join(
         args.input if os.path.isdir(args.input) else os.path.dirname(args.input),
         "aurachrome_out")
@@ -357,16 +405,19 @@ def main():
         use_gpu = False
     elif args.gpu:
         use_gpu = backend.gpu_available()
-        if not use_gpu:
-            print(DIM("--gpu requested but no CUDA device found; using CPU."))
+        if not use_gpu and not args.progress_json:
+            print(DIM("--gpu requested but the CUDA backend is unavailable; using CPU."))
     else:
         use_gpu = backend.gpu_available()
     jobs = args.jobs or (1 if use_gpu else max(1, min(os.cpu_count() or 1, 4)))
 
-    run(inputs, outdir, presets, add_grain=not args.no_grain,
+    grain_level = "off" if args.no_grain else args.grain
+    grain_scale = GRAIN_SCALE[grain_level]
+
+    run(inputs, outdir, presets, add_grain=grain_scale > 0, grain_scale=grain_scale,
         longedge=args.longedge, use_gpu=use_gpu, jobs=jobs,
         progress_json=args.progress_json, fmt=args.format,
-        no_neural=args.no_neural)
+        no_neural=args.no_neural, gpu_requested=args.gpu)
 
 
 if __name__ == "__main__":

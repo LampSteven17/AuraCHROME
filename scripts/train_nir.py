@@ -119,6 +119,18 @@ def main():
     ap.add_argument("--out", default=os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "nir_unet.pt"))
     ap.add_argument("--seed", type=int, default=0)
+    # Synthetic spectral augmentation (synth_spectra.py): physically-rendered
+    # RGB/NIR tiles from PROSPECT/skin models. Added to TRAINING ONLY -- validation
+    # stays on real pairs (the research guardrail against render-statistics overfit).
+    ap.add_argument("--synth-tiles", type=int, default=0,
+                    help="generate N synthetic spectral tiles, add to training only")
+    ap.add_argument("--synth-size", type=int, default=0,
+                    help="synthetic tile size in px (0 = use --crop)")
+    ap.add_argument("--synth-dir", default=None, help="dir for generated synth tiles")
+    ap.add_argument("--init", default=None,
+                    help="warm-start weights from this checkpoint (finetune, not retrain)")
+    ap.add_argument("--save-last", action="store_true",
+                    help="also save the final-epoch weights (use when val can't see the target, e.g. skin)")
     args = ap.parse_args()
 
     random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
@@ -137,7 +149,25 @@ def main():
     random.shuffle(pairs)
     nval = max(1, int(len(pairs) * args.val_frac))
     val_pairs, train_pairs = pairs[:nval], pairs[nval:]
-    print(f"{len(pairs)} pairs  ({len(train_pairs)} train / {len(val_pairs)} val)")
+
+    # Synthetic augmentation -> TRAIN ONLY (keep validation real).
+    if args.synth_tiles > 0:
+        here = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, here)
+        import synth_spectra
+        sdir = args.synth_dir or os.path.join(os.path.dirname(here), "data", "_synth_cache")
+        size = args.synth_size or args.crop
+        print(f"generating {args.synth_tiles} synthetic tiles ({size}px, "
+              f"prosail={synth_spectra._HAS_PROSAIL}) -> {sdir}")
+        # skin-dominant: the real corpus is vegetation-heavy, so synth fills the
+        # skin/portrait gap (with a little leaf/soil for context variety).
+        synth_spectra.make_tiles(args.synth_tiles, size,
+                                 {"leaf": 0.20, "skin": 0.65, "soil": 0.15}, args.seed, sdir)
+        spairs = find_pairs(sdir)
+        train_pairs = train_pairs + spairs
+        print(f"  + {len(spairs)} synthetic pairs (train only; validation stays real)")
+
+    print(f"{len(pairs)} real pairs  ({len(train_pairs)} train / {len(val_pairs)} val)")
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     tl = DataLoader(PairDataset(train_pairs, args.crop, True, not args.no_photometric),
@@ -145,6 +175,12 @@ def main():
     vl = DataLoader(PairDataset(val_pairs, args.crop, False), batch_size=1, num_workers=2)
 
     model = CompactUNet(base=args.base).to(dev)
+    if args.init:  # warm-start from an existing checkpoint (finetune, not retrain)
+        ckpt = torch.load(args.init, map_location=dev)
+        state = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
+        model.load_state_dict(state)
+        print(f"warm-started from {args.init} "
+              f"(val_l1 {ckpt.get('val_l1', float('nan')):.4f}) -> finetuning")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     scaler = torch.amp.GradScaler(dev)
     l1 = nn.L1Loss()
@@ -181,6 +217,11 @@ def main():
             print(f"early stop: no val improvement >{args.min_delta} in {args.patience} epochs "
                   f"(stopped at epoch {ep+1}). best val L1 {best:.4f}")
             break
+    # For finetunes whose target (e.g. skin) isn't measured by the (veg) val set,
+    # keep the FINAL weights -- val-L1 only guards that veg didn't regress.
+    if args.save_last:
+        torch.save({"model": model.state_dict(), "base": args.base, "val_l1": vmae}, args.out)
+        print(f"saved final-epoch weights (val L1 {vmae:.4f}) -> {args.out}")
     print(f"done. best val L1 {best:.4f} -> {args.out}")
 
 

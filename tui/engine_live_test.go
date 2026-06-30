@@ -21,7 +21,7 @@ func TestEngineBridgeLive(t *testing.T) {
 	}
 	out := t.TempDir()
 	cfg := runConfig{input: in, output: out, look: "classic", format: "tiff16",
-		grain: false, ir: "auto", device: "cpu", jobs: 1}
+		grain: "standard", ir: "auto", device: "cpu", jobs: 1}
 
 	msg := startEngine(cfg)()
 	rdy, ok := msg.(engReadyMsg)

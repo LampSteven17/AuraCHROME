@@ -59,6 +59,16 @@ nvidia-nccl-cu12 = "2.21.5"
 nvidia-nvtx-cu12 = "12.6.77"
 nvidia-cuda-cupti-cu12 = "12.6.80"
 
+
+# Synthetic spectral training data (PROSPECT/PROSAIL vegetation). Optional + only
+# needed by scripts/synth_spectra.py: `poetry install --with synth`. The generator
+# falls back to analytic spectra when this isn't installed.
+[tool.poetry.group.synth]
+optional = true
+
+[tool.poetry.group.synth.dependencies]
+prosail = "^2.0.5"
+
 [[tool.poetry.source]]
 name = "pytorch-cu126"
 url = "https://download.pytorch.org/whl/cu126"

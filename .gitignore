@@ -1,2 +1,22 @@
 .idea/
 .DS_Store
+
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+# large/generated artifacts
+luts/*.cube
+luts/*.dcp
+luts/presets/*.xmp
+# compiled Go TUI binary (repo-root ./aurachrome is a TRACKED launcher script)
+tui/aurachrome
+# legacy name (pre-rename)
+/aurachrome-tui
+tui/aurachrome-tui
+
+# neural backend: datasets + trained weights (large)
+data/
+models/

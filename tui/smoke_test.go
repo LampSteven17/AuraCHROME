@@ -89,15 +89,16 @@ func TestWizardFlowHeadless(t *testing.T) {
 	m = advance(t, m, key("down"))  // -> Size
 	m = advance(t, m, key("right")) // full -> 4096px (adds --longedge 4096)
 	m = advance(t, m, key("down"))  // -> Grain
-	m = advance(t, m, key("left"))  // toggle grain off
-	if m.grain {
-		t.Fatal("grain should be off")
+	m = advance(t, m, key("left"))  // standard -> subtle
+	m = advance(t, m, key("left"))  // subtle -> off
+	if grainLevels[m.grainIdx] != "off" {
+		t.Fatalf("grain should be off, got %q", grainLevels[m.grainIdx])
 	}
 	m = advance(t, m, key("down"))  // -> IR
 	m = advance(t, m, key("right")) // auto -> neural
 	m = advance(t, m, key("down"))  // -> Device
-	m = advance(t, m, key("right")) // auto -> cpu
-	m = advance(t, m, key("down"))  // -> Jobs
+	m = advance(t, m, key("right")) // auto (default) -> cpu
+	m = advance(t, m, key("down"))  // -> Jobs (re-enabled now device is cpu)
 	m = advance(t, m, key("right"))
 	if m.jobs != 5 {
 		t.Fatalf("jobs not incremented: %d", m.jobs)
@@ -111,7 +112,7 @@ func TestWizardFlowHeadless(t *testing.T) {
 	cfg := m.config()
 	got := strings.Join(cfg.args(), " ")
 	for _, want := range []string{"-i " + dir, "--preset punchy", "--format jpeg",
-		"--no-grain", "--longedge 4096", "--cpu", "--jobs 5", "--progress-json"} {
+		"--grain off", "--longedge 4096", "--cpu", "--jobs 5", "--progress-json"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("args missing %q in %q", want, got)
 		}

@@ -48,12 +48,20 @@ CLASSIC = dict(
     # (C~0.16), which must stay green per the §6 table.
     skin_hue_center=50.0,            # OKLab hue (deg) of caucasian skin (warm)
     skin_hue_width=38.0,
-    skin_chroma_lo=0.020, skin_chroma_lo2=0.045,
+    # chroma floor lowered (was .020/.045): real softly-lit skin is fairly
+    # DESATURATED (chroma ~0.036), so the old floor under-detected it -> the
+    # skin-protect fired on only ~25% of a real face, leaving it patchy/pink
+    # instead of the intended uniform waxy yellow-green (see the swatch test).
+    skin_chroma_lo=0.012, skin_chroma_lo2=0.028,
     skin_chroma_hi=0.100, skin_chroma_hi2=0.150,
     skin_red_lift=0.80,              # lift mapped-red TOWARD the green channel
     skin_green_cut=0.28,             # pull mapped-green down (kills emerald)
     skin_blue_cut=0.25,              # pull mapped-blue down (toward yellow)
     skin_amount=1.0,
+    # waxy-pale grade (OKLCh stage): desat pulls skin chroma toward neutral so it
+    # reads pale/waxy instead of green; cool nudges its hue cooler (deg).
+    skin_desat=0.55,
+    skin_cool=0.0,
 
     # --- stage 3: corrective grade in OKLCh ---
     # neutral de-teal: low-INPUT-chroma surfaces (concrete/asphalt/cloud) get
@@ -122,6 +130,14 @@ CLASSIC = dict(
     grain_strength=0.028,
     grain_size=1.2,
     grain_chroma=0.35,
+
+    # --- halation / highlight bloom (export route only; spatial, see halation.py)
+    # The HIE / Efke-AURA glow. OFF for Aerochrome (it has anti-halation backing).
+    # A future HIE/mono-IR stock sets strength > 0.
+    halation_strength=0.0,
+    halation_size=6.0,
+    halation_threshold=0.72,
+    halation_tint=(1.0, 0.45, 0.28),
 )
 
 PUNCHY = copy.deepcopy(CLASSIC)
@@ -161,15 +177,15 @@ MUTED.update(
 # back toward its natural color so people render pleasingly.
 PORTRAIT = copy.deepcopy(CLASSIC)
 PORTRAIT.update(
-    skin_preserve=0.92,
-    # SKIN-ONLY mask: narrow warm hue + a tight MODERATE-chroma band. Saturated
-    # warm things (sunsets, neon-warm signage) sit above the chroma ceiling and
-    # are excluded, so they still go full Aerochrome; near-neutral warm shadows
-    # sit below the floor and are excluded too.
+    skin_preserve=0.99,              # almost fully natural skin (people render true)
+    # SKIN-ONLY mask: warm hue + a chroma band. Saturated warm things (sunsets,
+    # neon-warm signage) sit above the ceiling and still go full Aerochrome.
+    # Floor lowered (was .030/.055) to catch real softly-lit skin (chroma ~0.036),
+    # and the hue/ceiling widened so more of a real face is preserved.
     skin_preserve_hue=52.0,
-    skin_preserve_hue_width=34.0,
-    skin_preserve_clo=0.030, skin_preserve_clo2=0.055,
-    skin_preserve_chi=0.110, skin_preserve_chi2=0.150,
+    skin_preserve_hue_width=44.0,
+    skin_preserve_clo=0.015, skin_preserve_clo2=0.032,
+    skin_preserve_chi=0.150, skin_preserve_chi2=0.230,
     grain_strength=0.018,            # gentle so skin stays clean
     grain_size=1.0,
 )
