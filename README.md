@@ -6,13 +6,12 @@
 
 ### Before / after
 
-The bar sweeps across to reveal the conversion — foliage → infrared magenta, a
-portrait, and a red → green sign:
+The bar sweeps across to reveal the conversion — foliage → infrared magenta and a
+red → green sign:
 
 <p align="center">
-  <img src="docs/media/wipe_waterfall.gif" alt="foliage to infrared magenta" width="30%">
-  <img src="docs/media/wipe_portrait.gif" alt="portrait" width="30%">
-  <img src="docs/media/wipe_redgreen.gif" alt="red to green" width="30%">
+  <img src="docs/media/wipe_waterfall.gif" alt="foliage to infrared magenta" width="42%">
+  <img src="docs/media/wipe_redgreen.gif" alt="red to green" width="42%">
 </p>
 
 <sub>These auto-wipe rather than drag — GitHub READMEs can't run JavaScript, so a
