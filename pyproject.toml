@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aurachrome"
-version = "0.1.0"
+version = "1.0.0"
 description = "Aurachrome - Kodak Aerochrome / EIR false-color film engine: RAW -> 16-bit TIFF, CPU or CUDA GPU."
 authors = ["Steven Lamp <srlamp3@gmail.com>"]
 readme = "README.md"

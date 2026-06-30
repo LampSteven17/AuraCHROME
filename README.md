@@ -6,6 +6,10 @@ CUDA GPU), for a **Sony A7C II** stills workflow into Lightroom → Photoshop. I
 also still emits a portable 3D `.cube` LUT and an experimental Lightroom profile
 (both deprecated in favor of the RAW→TIFF engine).
 
+Beyond the Aerochrome false-color look it also renders **redscale** (a parametric,
+visible-light stock) and **Kodak HIE** (B&W infrared, Wood effect + halation) — see
+[Looks](#looks-film-stocks).
+
 This is a **perceptual approximation, not a physical one.** "Close, not perfect."
 
 ## Quick start
@@ -57,6 +61,8 @@ Export options:
 
 - `--format tiff16|jpeg|both` — 16-bit TIFF (default), an 8-bit sRGB JPEG, or both
   written side by side. JPEG is the quick-share / proof; TIFF is the master.
+- `--grain off|subtle|standard|heavy` — chromatic film-grain amount (default
+  `standard`; `--no-grain` is an alias for `off`).
 - `--longedge N` — downscale the long edge to `N` px (0 = full resolution) for
   fast previews.
 - `--no-neural` — force the per-pixel GRVI index even when the learned NIR model
@@ -145,18 +151,27 @@ See `aerochrome/transform.py` for the annotated pipeline.
 
 ```
 aerochrome/
+  transform.py   the core Aerochrome (R,G,B)->(R,G,B) false-color function
+  stocks.py      StockProfile registry dispatching the film families
+  redscale.py    redscale stock (parametric, visible-only, no neural)
+  monoir.py      HIE / mono-IR stock (B&W infrared, Wood effect)
+  halation.py    HIE/Efke halation-bloom spatial pass (export-only)
+  grain.py       chromatic film grain (spatial, export-only)
+  params.py      look presets (classic/punchy/muted/portrait) + stock params
   encodings.py   sRGB<->linear, OKLab/OKLCh, S-Log3/S-Gamut3.Cine
-  transform.py   the core (R,G,B)->(R,G,B) function
-  params.py      presets: classic / punchy / muted
-  cube.py        write/read .cube (17/33/65) + trilinear apply
+  spectral.py    render RGB + an IR band from reflectance spectra
+  neural/        learned RGB->NIR U-Net (the default IR source)
+  backend.py     NumPy/CuPy dispatch (one CPU/GPU codepath)
+  cube.py        write/read .cube (17/33/65) + trilinear apply (legacy)
 scripts/
-  make_cube.py   generate .cube files into luts/
-  apply_lut.py   apply a .cube (or the transform) to an image
-  preview.py     swatch grid + procedural scene, before/after PNG
-  tune.py        parameter sweep -> contact sheet
-tests/
-  test_swatches.py  asserts expected hue family per surface (handoff §6)
-luts/            generated .cube + preview/ PNGs
+  aero_convert.py          the converter + TUI entry (console: aurachrome)
+  ingest_hyperspectral.py  ENVI hyperspectral cube -> (RGB, NIR-band) pairs
+  synth_spectra.py         synthesize paired data (PROSPECT + skin models)
+  train_nir.py             train / finetune the RGB->NIR model
+  make_cube.py / apply_lut.py / make_profile.py   legacy .cube/.dcp export
+tests/           stocks, monoir, halation, ingest, synth, swatches
+tui/             Go / Bubble Tea wizard front-end
+luts/            generated .cube + preview/ PNGs (legacy)
 ```
 
 ## Quickstart
@@ -179,13 +194,22 @@ python scripts/tune.py --param ir_veg --values 1.1,1.55,1.9 \
 `apply_lut.py --direct` runs the transform without the LUT (full precision),
 useful for confirming a `.cube` matches its source.
 
-## Presets
+## Looks (film stocks)
 
-| preset    | character                                            |
-|-----------|------------------------------------------------------|
-| `classic` | balanced, the default                                |
-| `punchy`  | max foliage pop, low desat, high contrast            |
-| `muted`   | lower saturation, closer to faded EIR scans          |
+Three families, selected with `--preset`:
+
+| preset     | family        | character                                                  |
+|------------|---------------|------------------------------------------------------------|
+| `classic`  | Aerochrome    | balanced false-color IR, the default                       |
+| `punchy`   | Aerochrome    | max foliage pop, low desat, high contrast                  |
+| `muted`    | Aerochrome    | lower saturation, closer to faded EIR scans                |
+| `portrait` | Aerochrome    | classic everywhere except skin, kept near-natural          |
+| `redscale` | visible       | colour-neg-through-the-base, warm red→yellow (no IR/neural)|
+| `hie`      | mono-IR (B&W) | Kodak HIE: B&W infrared, Wood effect + halation glow        |
+
+`--preset all` renders the four Aerochrome looks. The Aerochrome and HIE families
+use the neural NIR (GRVI fallback); redscale is purely parametric. Stock profiles
+live in `aerochrome/stocks.py`.
 
 ## Encoding variants
 
