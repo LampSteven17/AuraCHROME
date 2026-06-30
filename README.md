@@ -32,10 +32,18 @@ This is a **perceptual approximation, not a physical one.** "Close, not perfect.
 ## Quick start
 
 ```bash
-make setup      # install Poetry (if missing) + deps, build the TUI
-make install    # put `aurachrome` (the TUI) on your PATH (~/.local/bin)
+./aurachrome    # launch the TUI — the default run command
+```
+
+That's it. `./aurachrome` is the launcher: on first run it compiles the Go TUI
+(and again whenever a `tui/*.go` changes), bootstraps the Python engine's
+virtualenv if needed, then runs. Needs Go (to build the TUI) and Poetry (for the
+engine); a one-time `make setup` installs those deps if you don't have them.
+
+```bash
+make setup      # one-time: install Poetry (if missing) + deps, build the TUI
 make doctor     # verify python / poetry / go / GPU
-make run        # launch the TUI
+make install    # optional: also put `aurachrome` on your PATH (~/.local/bin)
 
 make convert ARGS="-i RAWS/ -o OUT/ --preset classic --gpu"   # headless batch
 ```
